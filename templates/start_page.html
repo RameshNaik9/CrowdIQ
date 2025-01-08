@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrowdIQ</title>
+    <link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Aleo:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Beth+Ellen&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <style>
+        body {
+            font-family: 'League Spartan', sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: url('/static/bg.jpg') no-repeat center center fixed;
+            background-size: cover;
+            color: white;
+            text-align: center;
+        }
+
+        h1 {
+            font-family: 'League Spartan', sans-serif;
+            font-size: 10em;
+            margin: 0;
+            color: #333;
+            animation: dance 5s ease-in-out infinite; /* Dancing animation */
+        }
+
+        @keyframes dance {
+            0% {
+                transform: translateY(0);
+            }
+            25% {
+                transform: translateY(-10px); /* Move up */
+            }
+            50% {
+                transform: translateY(0); /* Back to normal */
+            }
+            75% {
+                transform: translateY(-10px); /* Move down */
+            }
+            100% {
+                transform: translateY(0); /* Back to normal */
+            }
+        }
+        h3 {
+            font-family: 'Aleo', serif;
+            font-size: 2em;
+            color: #555;
+            margin: 10px 0;
+            animation: dance 5s ease-in-out infinite; /* Dancing animation */
+
+        }
+        button {
+            font-family: 'Dancing Script', latin;
+            font-size: 1.9em;
+            margin-top: 20px;
+            width: 300px;
+            padding: 10px 25px;
+            color: white;
+            background: linear-gradient(145deg, #333, #8a2be2); /* Gradient background */
+            border: none;
+            border-radius: 30px; /* Curved edges */
+            cursor: pointer;
+            box-shadow: 3px 3px 10px rgba(0, 0, 0, 0.2), -3px -3px 10px rgba(255, 255, 255, 0.3); /* Soft shadow for 3D effect */
+            transition: all 0.3s ease; /* Smooth transition */
+        }
+
+        button:hover {
+            background: linear-gradient(145deg, #333, #6a5acd); /* Reverse gradient on hover */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3), 0 0 30px rgba(255, 255, 255, 0.4); /* Glow effect on hover */
+            transform: translateY(-5px); /* Slight lift effect */
+        }
+        footer {
+            margin-top: 40px;
+            font-size: 1.8em;
+            color: #333;
+            font-family: 'League Spartan', sans-serif;
+       
+
+        }
+       
+        .bold-text {
+            
+            font-family: Georgia, serif;
+            font-weight: bold;
+            font-size: 1.6em;
+        }
+    
+    </style>
+</head>
+<body>
+    <h1>CrowdIQ</h1>
+    <h3>SEE BEYOND THE CROWD</h3>
+    <button onclick="window.location.href='/rtsp'">Start</button>
+    <footer>
+        Powered by <span class="bold-text">DevelMo</span>
+    </footer>
+</body>
+</html>

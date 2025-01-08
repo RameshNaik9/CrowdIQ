@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visitor Virtue</title>
+    <link href="https://fonts.googleapis.com/css2?family=League+Spartan:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Aleo:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Beth+Ellen&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <style>
+        .beth-ellen-regular {
+            font-family: "Beth Ellen", cursive;
+            font-weight: 400;
+            font-style: normal;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: url('/static/bg.jpg') no-repeat center center fixed;
+            background-size: cover;
+            color: white;
+        }
+
+        h2 {
+            font-family: 'League Spartan', sans-serif;
+            font-size: 5em;
+            color: #333;
+        }
+
+        h3 {
+            font-family: 'Aleo', serif;
+            font-size: 1.5em;
+            color: #333;
+            text-align: center;
+            margin-top: -60px;
+            margin-bottom: 40px;
+        }
+
+        .container {
+            display: flex;
+            justify-content: space-around;
+            width: 80%;
+            height: 30%;
+        }
+
+        .count-panel {
+            text-align: center;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            flex: 1;
+            margin: 0 10px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin: 0;
+            color: #333;
+        }
+
+        .count {
+            font-size: 3em;
+            font-weight: bold;
+            color: #007bff;
+            margin-top: 20px;
+        }
+
+        footer {
+            margin-top: 40px;
+            font-size: 2em;
+            color: #333;
+            font-family: 'League Spartan', sans-serif;
+        }
+
+        button {
+            font-size: 1.4em;
+            margin-top: 20px;
+            width: 300px;
+            padding: 10px 25px;
+            color: white;
+            background: linear-gradient(145deg, #333, #8a2be2); /* Gradient background */
+            border: none;
+            border-radius: 30px; /* Curved edges */
+            cursor: pointer;
+            box-shadow: 3px 3px 10px rgba(0, 0, 0, 0.2), -3px -3px 10px rgba(255, 255, 255, 0.3); /* Soft shadow for 3D effect */
+            transition: all 0.3s ease; /* Smooth transition */
+        }
+
+        button:hover {
+            background: linear-gradient(145deg, #333, #6a5acd); /* Reverse gradient on hover */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3), 0 0 30px rgba(255, 255, 255, 0.4); /* Glow effect on hover */
+            transform: translateY(-5px); /* Slight lift effect */
+        }
+        .button-container {
+            display: flex;
+            justify-content: center;
+            width: 30%;
+            margin-top: 20px;
+        }
+
+
+    /* Style for the "Back to Start" link */
+    .back-to-start {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-family: 'League Spartan', sans-serif;
+            font-size: 1.0em;
+            color: #fff;
+            text-decoration: none;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px 15px;
+            border-radius: 5px;
+            transition: background-color 0.3s ease;
+            background: linear-gradient(145deg, #333, #8a2be2); /* Gradient background */
+            border: none;
+            border-radius: 30px; /* Curved edges */
+            cursor: pointer;
+            box-shadow: 3px 3px 10px rgba(0, 0, 0, 0.2), -3px -3px 10px rgba(255, 255, 255, 0.3); /* Soft shadow for 3D effect */
+            transition: all 0.3s ease; /* Smooth transition */
+        }
+
+        .back-to-start:hover {
+            background: linear-gradient(145deg, #333, #6a5acd); /* Reverse gradient on hover */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3), 0 0 30px rgba(255, 255, 255, 0.4); /* Glow effect on hover */
+            transform: translateY(-5px); /* Slight lift effect */
+        }
+
+    </style>
+    <script>
+        setInterval(() => {
+            fetch('/highest_count')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('total-count').innerText = data.highest_count;
+                    document.getElementById('male-count').innerText = data.male_count;
+                    document.getElementById('female-count').innerText = data.female_count;
+                });
+        }, 1000);
+    </script>
+</head>
+<body>
+    <!-- <a href="/" class="back-to-start">Back</a> -->
+
+    <h2>CrowdIQ</h2>
+    <h3>SEE BEYOND THE CROWD</h3>
+    <div class="container">
+        <div class="count-panel">
+            <h1>Total Visitors</h1>
+            <div class="count" id="total-count">0</div>
+            <footer></footer>
+        </div>
+        <div class="count-panel">
+            <h1>Males</h1>
+            <div class="count" id="male-count">0</div>
+            <footer></footer>
+        </div>
+        <div class="count-panel">
+            <h1>Females</h1>
+            <div class="count" id="female-count">0</div>
+            <footer></footer>
+        </div>
+    </div>
+    <div class="button-container">
+        <button onclick="window.location.href='/video'">Video Tracking</button>
+    </div>
+    <footer>
+        Powered by <span class="bold-text">DevelMo</span>
+    </footer>
+    
+    <style>
+        .bold-text {
+            font-weight: bold;
+        }
+    </style>
+    
+    
+</body>
+</html>
