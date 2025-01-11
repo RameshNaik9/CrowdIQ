@@ -62,7 +62,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 date_str = datetime.now().strftime('%Y-%m-%d')  # Get current date as a string
 folder_path = os.path.join(current_dir, 'csv')
 csv_file = os.path.join(folder_path, 'person_tracking_data.csv')
- 
+
 csv_lock = threading.Lock()
 
 
@@ -454,7 +454,6 @@ def display_callback(opaque, picture):
 
 def process_video(video_path):
 
-
     global frame_buffer
 
     # Create a VLC instance
@@ -491,15 +490,14 @@ def process_video(video_path):
 
             print(f"Trying to connect to the video stream: {video_path}")
             # cap = cv2.VideoCapture(video_path)
-            
+
             cap = cv2.VideoCapture(video_path)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)  # Set buffer size
             cap.grab()
             # cv2.setExceptionMode(True)
             if not cap.isOpened():
                 raise ValueError("Failed to open video stream. Retrying...")
-            
-            
+
             fps = cap.get(cv2.CAP_PROP_FPS) or 20
             print(f"Video stream opened. FPS: {fps}")
 
@@ -521,7 +519,6 @@ def process_video(video_path):
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
-    
                 # Process current frame if no defects
                 if frame_number % 1 == 0:
                     img = cv2.resize(img, (1080, 720))
@@ -553,7 +550,8 @@ def process_video(video_path):
     player.stop()
     print("Video processing stopped.")
 
-process_video(r"D:\msc\Vid.mp4")
+process_video(r"/Users/ramesh/Downloads/upwork/CrowdIQ V1 MS/sample.mp4")
+# process_video(r"/Users/ramesh/Downloads/upwork/CrowdIQ V1 MS/Vid.mp4")
 # # Add ffmpeg to PATH for the Python processq
 # ffmpeg_path = r"C:\ffmpeg\bin"  # ReplFageace with the actual path to your ffmpeg installation
 # os.environ["PATH"] += os.pathsep + ffmpeg_path
@@ -611,7 +609,7 @@ process_video(r"D:\msc\Vid.mp4")
 #         video_thread = threading.Thread(target=run_video_processing, daemon=True)
 
 #         video_thread.start()
-    
+
 #     return render_template('index2.html')  # Main visitor count page
 
 # def run_video_processing():

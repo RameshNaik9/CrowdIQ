@@ -17,10 +17,6 @@ import gc
 from datetime import datetime
 
 
-
-
-
-
 def check_date_and_proceed(final_date_str):
     # Convert the final date string to a datetime object
     final_date = datetime.strptime(final_date_str, '%Y-%m-%d')
@@ -40,9 +36,6 @@ final_date = '2025-04-15'  # Example final date
 check_date_and_proceed(final_date)
 
 date_str = datetime.now().strftime('%Y-%m-%d')  # Get current date as a string
-
-
-
 
 
 # Firebase Initialization
@@ -94,7 +87,6 @@ def track_objects(detections, img):
     """Update tracked objects based on detections."""
     tracks = tracker.update_tracks(detections, frame=img)
     return tracks
-
 
 
 def db_add_new(data):
@@ -160,7 +152,6 @@ def update_time_spent_in_csv(serial_number, new_time_spent):
             writer = csv.writer(file)
             writer.writerow(headers)  # Write headers
             writer.writerows(rows)    # Write all rows, including modified ones
-
 
 
 def async_update_db_and_csv(track_data, elapsed_time):
@@ -272,51 +263,8 @@ def process_video(video_path):
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    video_path = "Vid.mp4"  # Replace with your video path
+    video_path = "sample.mp4"  # Replace with your video path
     process_video(video_path)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # import os
