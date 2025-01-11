@@ -142,11 +142,8 @@ def update_time_spent_in_csv(serial_number, new_time_spent):
 def process_frame(img, frame_number, fps):
     global serial_number, male_count, female_count
 
-    img_copy = img.copy()
-    result_img, detections, boxes = predict_objects(
-        img_copy, model, classes=[0], conf=0.5
-    )
-    tracks = track_objects(detections, img)
+    result_img, detections, boxes = predict_objects(img, model, classes=[0], conf=0.5)
+    tracks = track_objects(detections, result_img)
 
     current_tracks = set()
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -192,6 +189,8 @@ def process_frame(img, frame_number, fps):
             elapsed_time,
         )
 
+        # Draw bounding boxes with tracking information
+        cv2.rectangle(result_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         text_lines = [
             f"ID: {track_info[track_id]['serial_number']}",
             f"Gender: {track_info[track_id]['gender']}",
@@ -201,12 +200,12 @@ def process_frame(img, frame_number, fps):
         for i, line in enumerate(text_lines):
             y_position = y1 - 10 - i * 20
             cv2.putText(
-                img,
+                result_img,
                 line,
                 (x1, y_position),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
-                (255, 255, 255),
+                (0, 255, 0),
                 2,
             )
 
@@ -216,9 +215,10 @@ def process_frame(img, frame_number, fps):
     for track_id in disappeared_tracks:
         del track_info[track_id]
 
-    return img
+    return result_img
 
 
+# Predict objects using YOLO model
 def predict_objects(img, chosen_model, classes=[0], conf=0.3):
     results = chosen_model.predict(img, classes=classes, conf=conf)
     detections, boxes = [], []
@@ -233,24 +233,16 @@ def predict_objects(img, chosen_model, classes=[0], conf=0.3):
             class_id, confidence = int(box.cls[0]), box.conf[0]
             detections.append([[x1, y1, x2 - x1, y2 - y1], confidence, class_id])
             boxes.append((x1, y1, x2, y2))
-            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(
-                img,
-                f"{class_names[class_id]}",
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_PLAIN,
-                1,
-                (255, 0, 0),
-                1,
-            )
     return img, detections, boxes
 
 
+# Track objects with DeepSort
 def track_objects(detections, img):
     tracks = tracker.update_tracks(detections, frame=img)
     return tracks
 
 
+# Predict gender using classification model
 def predict_gender(track_roi):
     try:
         track_roi_resized = cv2.resize(track_roi, (224, 224))
@@ -268,6 +260,7 @@ def predict_gender(track_roi):
         return "Unknown Gender"
 
 
+# Process the video file and save processed output
 def process_video(video_path):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -284,18 +277,36 @@ def process_video(video_path):
     )
 
     frame_number = 0
+    total_time = 0  # To measure total processing time
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
+        # Start time
+        start_time = time.time()
+
         result_img = process_frame(frame, frame_number, fps)
         out.write(result_img)  # Write the frame to the output video
+
+        # End time
+        end_time = time.time()
+        processing_time = end_time - start_time
+        total_time += processing_time
+
+        # Calculate and log FPS
+        current_fps = 1 / processing_time
+        logger.info(f"Frame {frame_number} processed. FPS: {current_fps:.2f}")
+
         frame_number += 1
 
         cv2.imshow("Inference", result_img)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+
+    avg_fps = frame_number / total_time
+    logger.info(f"Average FPS: {avg_fps:.2f}")
 
     cap.release()
     out.release()
