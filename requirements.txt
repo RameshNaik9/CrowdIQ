@@ -13,6 +13,7 @@ filelock==3.16.1
 firebase-admin==6.6.0
 Flask==3.1.0
 fonttools==4.55.3
+ffmpeg
 fsspec==2024.12.0
 google-api-core==2.24.0
 google-api-python-client==2.158.0
