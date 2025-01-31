@@ -173,3 +173,6 @@ def process_stream(camera_id, rtsp_url):
     # Remove from active streams
     if camera_id in active_streams:
         del active_streams[camera_id]
+
+
+#  uvicorn main:app --reload
