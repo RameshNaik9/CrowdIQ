@@ -1,0 +1,8 @@
+crowdiqenv
+*.dat
+*.log
+*.pyc
+*.pyo
+*.pyclass
+__pycache__
+.DS_Store
