@@ -159,7 +159,7 @@ def process_stream(camera_id, rtsp_url):
                 {"type": "person", "confidence": 0.95},
             ],
         }
-        print(f"[INFO] Metadata: {json.dumps(metadata)}")
+        # print(f"[INFO] Metadata: {json.dumps(metadata)}")
 
         # Terminate the loop if the stream is no longer active
         if camera_id not in active_streams:
