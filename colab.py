@@ -16,6 +16,9 @@ import gc
 import time
 import torch
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Suppress most TensorFlow warnings
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Running on: {device}")
 
@@ -320,7 +323,11 @@ def process_video(video_path):
 
         frame_number += 1
 
-        cv2.imshow("Inference", result_img)
+        # cv2.imshow("Inference", result_img)
+        from google.colab.patches import cv2_imshow
+
+        cv2_imshow(result_img)
+
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
@@ -343,4 +350,4 @@ def process_video(video_path):
 
 # Main execution
 if __name__ == "__main__":
-    process_video("/Users/ramesh/Downloads/upwork/CrowdIQ V1 MS/sample.mp4")
+    process_video("/content/sample.mp4")
