@@ -13,6 +13,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 import random
 import gc
+import time
 
 # Setup logging
 logging.basicConfig(
@@ -91,6 +92,18 @@ if not os.path.exists(csv_file) or os.path.getsize(csv_file) == 0:
             ]
         )
         logger.info(f"Created new CSV file: {csv_file}")
+
+
+# Function to get video length in seconds
+def get_video_length(video_path):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.error("Failed to open video.")
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    return total_frames / fps if fps > 0 else None
 
 
 # Helper function to store tracking data in CSV
@@ -262,6 +275,9 @@ def predict_gender(track_roi):
 
 # Process the video file and save processed output
 def process_video(video_path):
+    start_processing_time = time.time()
+    video_length = get_video_length(video_path)
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         logger.error(f"Failed to open video stream: {video_path}")
@@ -286,12 +302,10 @@ def process_video(video_path):
 
         # Start time
         start_time = time.time()
-
         result_img = process_frame(frame, frame_number, fps)
-        out.write(result_img)  # Write the frame to the output video
-
-        # End time
+        out.write(result_img)
         end_time = time.time()
+
         processing_time = end_time - start_time
         total_time += processing_time
 
@@ -311,7 +325,15 @@ def process_video(video_path):
     cap.release()
     out.release()
     cv2.destroyAllWindows()
-    logger.info("Video processing completed and saved to 'Processed_Output.mp4'.")
+
+    end_processing_time = time.time()
+    total_processing_time = end_processing_time - start_processing_time
+
+    logger.info(f"Original video length: {video_length:.2f} seconds")
+    logger.info(f"Processed video length: {frame_number / fps:.2f} seconds")
+    logger.info(
+        f"Total time taken to process the video: {total_processing_time:.2f} seconds"
+    )
 
 
 # Main execution
