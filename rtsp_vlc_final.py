@@ -626,6 +626,6 @@ def video_feed():
     return Response(generate_frames_for_web(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=8000)
 
 # rtsp://niceravian:shahzeb@192.168.100.217/stream1
