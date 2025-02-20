@@ -331,7 +331,10 @@ async def websocket_endpoint(camera_id: str, websocket: WebSocket):
     try:
         while True:
             # Keep the connection alive.
-            await websocket.receive_text()
+            # await websocket.receive_text()
+            message = await websocket.receive_text()  # this won't block forever
+    # You can do something with message if you want, or ignore it.
+
     except WebSocketDisconnect:
         ws_manager.disconnect(camera_id)
 
