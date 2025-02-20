@@ -8,6 +8,7 @@ import asyncio
 import torch
 import random
 import numpy as np
+import queue  # Added for buffering
 
 # Import models and trackers
 from ultralytics import YOLO
@@ -32,6 +33,11 @@ main_loop = asyncio.get_event_loop()
 
 # Dictionary to hold active stream threads and their info.
 active_streams = {}
+
+# Global flag for buffered streaming optimization.
+USE_BUFFERED_STREAMING = True
+# Dictionary to hold a per-camera buffer queue (size 1) for frames.
+frame_buffers = {}
 
 
 # ------------------------------------------------------------------------------
@@ -170,6 +176,23 @@ def process_frame(img, frame_number, fps):
     return img
 
 
+async def stream_frames(camera_id: str):
+    """
+    Asynchronous task to continuously get the latest frame from the
+    buffer and send it over the WebSocket.
+    """
+    while camera_id in frame_buffers:
+        try:
+            # Try to get the latest frame without blocking.
+            frame_bytes = frame_buffers[camera_id].get(block=False)
+        except queue.Empty:
+            await asyncio.sleep(0.01)
+            continue
+        await ws_manager.send_frame(camera_id, frame_bytes)
+        # A very short sleep can help with cooperative multitasking.
+        await asyncio.sleep(0.001)
+
+
 def process_stream(camera_id, rtsp_url):
     """
     Open the RTSP stream, process each frame using the detection/tracking
@@ -191,6 +214,12 @@ def process_stream(camera_id, rtsp_url):
     # fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     # out = cv2.VideoWriter("Processed_Output.mp4", fourcc, fps, (frame_width, frame_height))
 
+    # Initialize the frame buffer for this camera if using buffered streaming.
+    if USE_BUFFERED_STREAMING:
+        frame_buffers[camera_id] = queue.Queue(maxsize=1)
+        # Start an asynchronous task to stream frames from the buffer.
+        main_loop.call_soon_threadsafe(asyncio.create_task, stream_frames(camera_id))
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -209,17 +238,28 @@ def process_stream(camera_id, rtsp_url):
             continue
         frame_bytes = buffer.tobytes()
 
-        # Asynchronously send the frame via WebSocket.
-        try:
-            main_loop.call_soon_threadsafe(
-                asyncio.create_task, ws_manager.send_frame(camera_id, frame_bytes)
-            )
-        except Exception as e:
-            print(f"[ERROR] Failed to send frame: {e}")
+        if USE_BUFFERED_STREAMING:
+            # Place the frame in the buffer. If full, drop the old frame.
+            try:
+                frame_buffers[camera_id].put(frame_bytes, block=False)
+            except queue.Full:
+                try:
+                    frame_buffers[camera_id].get_nowait()
+                except queue.Empty:
+                    pass
+                frame_buffers[camera_id].put(frame_bytes, block=False)
+        else:
+            # Original method: send directly via the event loop.
+            try:
+                main_loop.call_soon_threadsafe(
+                    asyncio.create_task, ws_manager.send_frame(camera_id, frame_bytes)
+                )
+            except Exception as e:
+                print(f"[ERROR] Failed to send frame: {e}")
 
         frame_number += 1
 
-        # (Optional) To avoid overwhelming CPU, you may add a small sleep.
+        # (Optional) To avoid overwhelming the CPU, you may add a small sleep.
         # time.sleep(0.01)
 
     cap.release()
@@ -227,6 +267,9 @@ def process_stream(camera_id, rtsp_url):
     # out.release()
     if camera_id in active_streams:
         del active_streams[camera_id]
+    # Clean up the frame buffer if it exists.
+    if camera_id in frame_buffers:
+        del frame_buffers[camera_id]
     print(f"[INFO] Released RTSP stream for camera_id: {camera_id}")
 
 
