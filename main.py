@@ -34,6 +34,9 @@ main_loop = asyncio.get_event_loop()
 # Dictionary to hold active stream threads and their info.
 active_streams = {}
 
+# Global dictionary to hold stop flags for each camera.
+stop_flags = {}
+
 # Global flag for buffered streaming optimization.
 USE_BUFFERED_STREAMING = True
 # Dictionary to hold a per-camera buffer queue (size 1) for frames.
@@ -41,11 +44,15 @@ frame_buffers = {}
 
 
 # ------------------------------------------------------------------------------
-# Request Model
+# Request Models
 # ------------------------------------------------------------------------------
 class StartInferenceRequest(BaseModel):
     camera_id: str
     rtsp_url: str
+
+
+class StopInferenceRequest(BaseModel):
+    camera_id: str
 
 
 # ------------------------------------------------------------------------------
@@ -81,7 +88,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Running on: {device}")
 
 # Initialize YOLO model for object detection.
-# Adjust the model path as needed.
 yolo_model_path = "model/yolo11n.pt"
 yolo_model = YOLO(yolo_model_path)
 yolo_model = yolo_model.to(device)
@@ -102,11 +108,10 @@ gender_model = AutoModelForImageClassification.from_pretrained(
     "rizvandwiki/gender-classification"
 )
 
+
 # ------------------------------------------------------------------------------
 # Processing Functions
 # ------------------------------------------------------------------------------
-
-
 def process_frame(img, frame_number, fps):
     """
     Process a single frame:
@@ -115,29 +120,20 @@ def process_frame(img, frame_number, fps):
     - For each confirmed track, perform gender prediction,
       assign a dummy age, and annotate the frame.
     """
-    # Run YOLO detection on the image.
     results = yolo_model.predict(img, classes=[0], conf=0.5)
     detections = []
     for result in results:
         for box in result.boxes:
-            # Get bounding box coordinates.
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             confidence = float(box.conf[0])
             class_id = int(box.cls[0])
             detections.append([[x1, y1, x2 - x1, y2 - y1], confidence, class_id])
-
-    # Track detected objects using DeepSort.
     tracks = tracker.update_tracks(detections, frame=img)
-
-    # Process each confirmed track.
     for track in tracks:
         if not track.is_confirmed():
             continue
-
         track_id = track.track_id
         x1, y1, x2, y2 = map(int, track.to_tlbr())
-
-        # Extract region of interest for gender prediction.
         track_roi = img[y1:y2, x1:x2]
         try:
             if track_roi.size == 0:
@@ -153,26 +149,13 @@ def process_frame(img, frame_number, fps):
                 )
         except Exception as e:
             gender = "Unknown"
-
-        # Calculate elapsed time (as a simple example, using frame number).
         elapsed_time = frame_number / fps
-
-        # Assign age randomly (as in Detect3.py demo).
         age = random.choice(["25-35", "36-50"])
-
-        # Draw bounding box and overlay tracking info.
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         text = f"ID:{track_id} {gender} {age} {elapsed_time:.2f}s"
         cv2.putText(
-            img,
-            text,
-            (x1, y1 - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0),
-            2,
+            img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
         )
-
     return img
 
 
@@ -220,7 +203,15 @@ def process_stream(camera_id, rtsp_url):
         # Start an asynchronous task to stream frames from the buffer.
         main_loop.call_soon_threadsafe(asyncio.create_task, stream_frames(camera_id))
 
+    # Initialize stop flag for this camera
+    stop_flags[camera_id] = False
+
     while True:
+        # Check if a stop has been requested
+        if stop_flags.get(camera_id):
+            print(f"[INFO] Stop flag received for camera_id: {camera_id}")
+            break
+
         ret, frame = cap.read()
         if not ret:
             print(f"[INFO] Stream ended for camera_id: {camera_id}")
@@ -270,6 +261,8 @@ def process_stream(camera_id, rtsp_url):
     # Clean up the frame buffer if it exists.
     if camera_id in frame_buffers:
         del frame_buffers[camera_id]
+    if camera_id in stop_flags:
+        del stop_flags[camera_id]
     print(f"[INFO] Released RTSP stream for camera_id: {camera_id}")
 
 
@@ -310,6 +303,22 @@ async def start_inference(request: StartInferenceRequest):
     active_streams[camera_id] = {"thread": stream_thread, "rtsp_url": rtsp_url}
 
     return {"message": f"Inference started successfully for camera_id: {camera_id}"}
+
+
+@app.post("/stop-inference")
+async def stop_inference(request: StopInferenceRequest):
+    """
+    Stop the inference process for the provided camera_id.
+    Sets the stop flag to gracefully exit the processing thread.
+    """
+    camera_id = request.camera_id
+    if camera_id not in active_streams:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No active inference running for camera_id: {camera_id}",
+        )
+    stop_flags[camera_id] = True
+    return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
 
 
 @app.websocket("/ws/{camera_id}")
