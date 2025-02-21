@@ -90,6 +90,15 @@ class WebSocketManager:
             except WebSocketDisconnect:
                 self.disconnect(camera_id)
 
+    async def send_text(self, camera_id: str, message: str):
+        """Send a text message (e.g., 'inference_stopped') to the WebSocket."""
+        if camera_id in self.active_connections:
+            websocket = self.active_connections[camera_id]
+            try:
+                await websocket.send_text(message)
+            except WebSocketDisconnect:
+                self.disconnect(camera_id)
+
 
 ws_manager = WebSocketManager()
 
@@ -285,6 +294,11 @@ def process_stream(camera_id, rtsp_url):
         del stop_flags[camera_id]
     print(f"[INFO] Released RTSP stream for camera_id: {camera_id}")
 
+    # Push a message to any connected WebSocket that inference has stopped
+    asyncio.run_coroutine_threadsafe(
+        ws_manager.send_text(camera_id, "inference_stopped"), main_loop
+    )
+
 
 # ------------------------------------------------------------------------------
 # New Endpoint: Check RTSP Stream WITHOUT starting inference
@@ -310,7 +324,18 @@ def check_stream(rtsp_url: str = Query(..., description="RTSP URL to verify")):
 
 
 # ------------------------------------------------------------------------------
-# Start/Stop Inference Endpoints
+# New route: /inference-status
+# ------------------------------------------------------------------------------
+@app.get("/inference-status")
+def inference_status(camera_id: str):
+    """
+    Returns whether the camera_id is currently in active_streams (meaning it is running).
+    """
+    return {"active": camera_id in active_streams}
+
+
+# ------------------------------------------------------------------------------
+# Start/Stop Inference
 # ------------------------------------------------------------------------------
 @app.post("/start-inference")
 async def start_inference(request: StartInferenceRequest):
@@ -324,17 +349,13 @@ async def start_inference(request: StartInferenceRequest):
 
     if camera_id in active_streams:
         raise HTTPException(
-            status_code=400,
-            detail=f"Inference already running for camera_id: {camera_id}",
+            400, f"Inference already running for camera_id: {camera_id}"
         )
 
     # Quick check to ensure RTSP is valid
     test_cap = cv2.VideoCapture(rtsp_url)
     if not test_cap.isOpened():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Failed to connect to RTSP URL: {rtsp_url}",
-        )
+        raise HTTPException(400, f"Failed to connect to RTSP URL: {rtsp_url}")
     test_cap.release()
 
     # Start thread
@@ -356,8 +377,7 @@ async def stop_inference(request: StopInferenceRequest):
     camera_id = request.camera_id
     if camera_id not in active_streams:
         raise HTTPException(
-            status_code=400,
-            detail=f"No active inference running for camera_id: {camera_id}",
+            400, f"No active inference running for camera_id: {camera_id}"
         )
     stop_flags[camera_id] = True
     return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
@@ -375,8 +395,7 @@ async def websocket_endpoint(camera_id: str, websocket: WebSocket):
     await ws_manager.connect(camera_id, websocket)
     try:
         while True:
-            # Keep the connection alive by receiving messages
-            await websocket.receive_text()
+            await websocket.receive_text()  # Keep the connection alive
     except WebSocketDisconnect:
         ws_manager.disconnect(camera_id)
 
