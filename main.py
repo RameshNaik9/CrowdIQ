@@ -1,4 +1,10 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+"""
+File: main.py
+Description: FastAPI backend with routes for /check-stream, /start-inference, /stop-inference,
+and a WebSocket for streaming processed frames.
+"""
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import cv2
@@ -59,6 +65,11 @@ class StopInferenceRequest(BaseModel):
 # WebSocket Manager to handle multiple client connections
 # ------------------------------------------------------------------------------
 class WebSocketManager:
+    """
+    Manages active WebSocket connections.
+    Allows multiple clients to subscribe to the same `camera_id` stream.
+    """
+
     def __init__(self):
         self.active_connections: dict[str, WebSocket] = {}
 
@@ -71,6 +82,7 @@ class WebSocketManager:
             del self.active_connections[camera_id]
 
     async def send_frame(self, camera_id: str, frame: bytes):
+        """Send a JPEG-encoded frame to the WebSocket corresponding to `camera_id`."""
         if camera_id in self.active_connections:
             websocket = self.active_connections[camera_id]
             try:
@@ -82,7 +94,7 @@ class WebSocketManager:
 ws_manager = WebSocketManager()
 
 # ------------------------------------------------------------------------------
-# Model Initialization (integrated from Detect3.py)
+# Model Initialization
 # ------------------------------------------------------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Running on: {device}")
@@ -110,7 +122,7 @@ gender_model = AutoModelForImageClassification.from_pretrained(
 
 
 # ------------------------------------------------------------------------------
-# Processing Functions
+# Utility/Processing Functions
 # ------------------------------------------------------------------------------
 def process_frame(img, frame_number, fps):
     """
@@ -128,13 +140,19 @@ def process_frame(img, frame_number, fps):
             confidence = float(box.conf[0])
             class_id = int(box.cls[0])
             detections.append([[x1, y1, x2 - x1, y2 - y1], confidence, class_id])
+
+    # Update DeepSort tracker
     tracks = tracker.update_tracks(detections, frame=img)
+
+    # Annotate each confirmed track
     for track in tracks:
         if not track.is_confirmed():
             continue
         track_id = track.track_id
         x1, y1, x2, y2 = map(int, track.to_tlbr())
         track_roi = img[y1:y2, x1:x2]
+
+        # Gender classification
         try:
             if track_roi.size == 0:
                 gender = "Unknown"
@@ -149,6 +167,8 @@ def process_frame(img, frame_number, fps):
                 )
         except Exception as e:
             gender = "Unknown"
+
+        # Example: random "age" & annotation
         elapsed_time = frame_number / fps
         age = random.choice(["25-35", "36-50"])
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -171,6 +191,7 @@ async def stream_frames(camera_id: str):
         except queue.Empty:
             await asyncio.sleep(0.01)
             continue
+
         await ws_manager.send_frame(camera_id, frame_bytes)
         # A very short sleep can help with cooperative multitasking.
         await asyncio.sleep(0.001)
@@ -220,11 +241,9 @@ def process_stream(camera_id, rtsp_url):
         processed_frame = process_frame(frame, frame_number, fps)
 
         # (Optional) Write the processed frame to a video file.
-        # out.write(processed_frame)
-
-        # Encode the processed frame as JPEG.
-        ret2, buffer = cv2.imencode(".jpg", processed_frame)
-        if not ret2:
+        # out.write(processed_frame)        # Encode the processed frame as JPEG
+        success, buffer = cv2.imencode(".jpg", processed_frame)
+        if not success:
             print("[ERROR] Failed to encode frame")
             continue
         frame_bytes = buffer.tobytes()
@@ -234,13 +253,14 @@ def process_stream(camera_id, rtsp_url):
             try:
                 frame_buffers[camera_id].put(frame_bytes, block=False)
             except queue.Full:
+                # Remove the oldest frame
                 try:
                     frame_buffers[camera_id].get_nowait()
                 except queue.Empty:
                     pass
                 frame_buffers[camera_id].put(frame_bytes, block=False)
         else:
-            # Original method: send directly via the event loop.
+            # Send directly (not recommended if concurrency is high)
             try:
                 main_loop.call_soon_threadsafe(
                     asyncio.create_task, ws_manager.send_frame(camera_id, frame_bytes)
@@ -267,10 +287,31 @@ def process_stream(camera_id, rtsp_url):
 
 
 # ------------------------------------------------------------------------------
-# FastAPI Endpoints
+# New Endpoint: Check RTSP Stream WITHOUT starting inference
 # ------------------------------------------------------------------------------
+@app.get("/check-stream")
+def check_stream(rtsp_url: str = Query(..., description="RTSP URL to verify")):
+    """
+    Quickly checks if the RTSP URL can be opened.
+    Does NOT start the inference thread—just opens briefly and closes.
+    """
+    cap = cv2.VideoCapture(rtsp_url)
+    if not cap.isOpened():
+        raise HTTPException(status_code=400, detail="Unable to open RTSP stream.")
+    # Try to read a single frame
+    ret, _ = cap.read()
+    cap.release()
+
+    if not ret:
+        raise HTTPException(
+            status_code=400, detail="RTSP stream opened but no frames read."
+        )
+    return {"message": "RTSP stream is valid and reachable."}
 
 
+# ------------------------------------------------------------------------------
+# Start/Stop Inference Endpoints
+# ------------------------------------------------------------------------------
 @app.post("/start-inference")
 async def start_inference(request: StartInferenceRequest):
     """
@@ -287,15 +328,16 @@ async def start_inference(request: StartInferenceRequest):
             detail=f"Inference already running for camera_id: {camera_id}",
         )
 
-    # Check RTSP connectivity.
-    cap = cv2.VideoCapture(rtsp_url)
-    if not cap.isOpened():
+    # Quick check to ensure RTSP is valid
+    test_cap = cv2.VideoCapture(rtsp_url)
+    if not test_cap.isOpened():
         raise HTTPException(
-            status_code=400, detail=f"Failed to connect to RTSP URL: {rtsp_url}"
+            status_code=400,
+            detail=f"Failed to connect to RTSP URL: {rtsp_url}",
         )
-    cap.release()
+    test_cap.release()
 
-    # Start processing in a separate thread.
+    # Start thread
     stream_thread = threading.Thread(
         target=process_stream, args=(camera_id, rtsp_url), daemon=True
     )
@@ -321,6 +363,9 @@ async def stop_inference(request: StopInferenceRequest):
     return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
 
 
+# ------------------------------------------------------------------------------
+# WebSocket Endpoint
+# ------------------------------------------------------------------------------
 @app.websocket("/ws/{camera_id}")
 async def websocket_endpoint(camera_id: str, websocket: WebSocket):
     """
@@ -330,11 +375,8 @@ async def websocket_endpoint(camera_id: str, websocket: WebSocket):
     await ws_manager.connect(camera_id, websocket)
     try:
         while True:
-            # Keep the connection alive.
-            # await websocket.receive_text()
-            message = await websocket.receive_text()  # this won't block forever
-    # You can do something with message if you want, or ignore it.
-
+            # Keep the connection alive by receiving messages
+            await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(camera_id)
 
