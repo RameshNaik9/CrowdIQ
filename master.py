@@ -14,20 +14,12 @@ import asyncio
 import torch
 import random
 import numpy as np
-import queue
-import websockets
-import json
-import logging
-import aiohttp
+import queue  # Added for buffering
 
 # Import models and trackers
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from transformers import AutoImageProcessor, AutoModelForImageClassification
-
-
-NODEJS_API_URL = "http://localhost:4000/api/v1/inference/trigger"
-
 
 # ------------------------------------------------------------------------------
 # FastAPI app setup
@@ -41,11 +33,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("FastAPI")
-
 
 # Get the main asyncio event loop for thread-safe scheduling.
 main_loop = asyncio.get_event_loop()
@@ -365,9 +352,6 @@ async def start_inference(request: StartInferenceRequest):
             400, f"Inference already running for camera_id: {camera_id}"
         )
 
-    # Notify Node.js when inference starts
-    asyncio.create_task(notify_nodejs_inference_started(camera_id, rtsp_url))
-
     # Quick check to ensure RTSP is valid
     test_cap = cv2.VideoCapture(rtsp_url)
     if not test_cap.isOpened():
@@ -398,21 +382,6 @@ async def stop_inference(request: StopInferenceRequest):
     stop_flags[camera_id] = True
     return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
 
-async def notify_nodejs_inference_started(camera_id, rtsp_url):
-    """Notify Node.js backend that inference has started."""
-    async with aiohttp.ClientSession() as session:
-        try:
-            payload = {"cameraId": camera_id, "rtspUrl": rtsp_url, "status": "started"}
-            async with session.post(NODEJS_API_URL, json=payload) as response:
-                if response.status == 200:
-                    logger.info(
-                        f"Node.js notified successfully for camera {camera_id}."
-                    )
-                else:
-                    logger.error(f"Failed to notify Node.js. Status: {response.status}")
-        except Exception as e:
-            logger.error(f"Error notifying Node.js: {e}")
-
 
 # ------------------------------------------------------------------------------
 # WebSocket Endpoint
@@ -435,3 +404,4 @@ async def websocket_endpoint(camera_id: str, websocket: WebSocket):
 # To run the application:
 # Use the command: uvicorn main:app --reload
 # ------------------------------------------------------------------------------
+# original working without socket to backend

@@ -20,14 +20,11 @@ import json
 import logging
 import aiohttp
 
+
 # Import models and trackers
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from transformers import AutoImageProcessor, AutoModelForImageClassification
-
-
-NODEJS_API_URL = "http://localhost:4000/api/v1/inference/trigger"
-
 
 # ------------------------------------------------------------------------------
 # FastAPI app setup
@@ -42,11 +39,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("FastAPI")
-
-
 # Get the main asyncio event loop for thread-safe scheduling.
 main_loop = asyncio.get_event_loop()
 
@@ -60,6 +52,55 @@ stop_flags = {}
 USE_BUFFERED_STREAMING = True
 # Dictionary to hold a per-camera buffer queue (size 1) for frames.
 frame_buffers = {}
+
+# ------------------------------------------------------------------------------
+# WebSocket connection to Node.js backend
+# ------------------------------------------------------------------------------
+NODEJS_WS_URL = "ws://localhost:4000/ws"  # Update with Node.js WebSocket endpoint
+RETRY_INTERVAL = 5  # Seconds before retrying WebSocket connection
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("FastAPI")
+
+
+async def connect_to_nodejs():
+    while True:
+        try:
+            logger.info("Connecting to Node.js WebSocket...")
+            async with websockets.connect(NODEJS_WS_URL) as websocket:
+                logger.info("Connected to Node.js WebSocket.")
+
+                # Keep connection alive
+                while True:
+                    await asyncio.sleep(10)  # Keep the connection open
+        except (websockets.ConnectionClosedError, ConnectionRefusedError) as e:
+            logger.warning(
+                f"WebSocket connection failed: {e}. Retrying in {RETRY_INTERVAL} seconds..."
+            )
+            await asyncio.sleep(RETRY_INTERVAL)
+        except Exception as e:
+            logger.error(
+                f"Unexpected error: {e}. Retrying in {RETRY_INTERVAL} seconds..."
+            )
+            await asyncio.sleep(RETRY_INTERVAL)
+
+
+# Background task to maintain WebSocket connection
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(connect_to_nodejs())
+
+
+# Function to send inference results to Node.js
+async def send_inference_result(result):
+    try:
+        async with websockets.connect(NODEJS_WS_URL) as websocket:
+            await websocket.send(json.dumps(result))
+            response = await websocket.recv()
+            logger.info(f"Node.js Response: {response}")
+    except Exception as e:
+        logger.error(f"Failed to send inference result: {e}")
 
 
 # ------------------------------------------------------------------------------
@@ -146,7 +187,7 @@ gender_model = AutoModelForImageClassification.from_pretrained(
 # ------------------------------------------------------------------------------
 # Utility/Processing Functions
 # ------------------------------------------------------------------------------
-def process_frame(img, frame_number, fps):
+def process_frame(img, frame_number, fps, camera_id):
     """
     Process a single frame:
     - Run YOLO object detection (for class 0, typically "person").
@@ -180,7 +221,9 @@ def process_frame(img, frame_number, fps):
                 gender = "Unknown"
             else:
                 track_roi_resized = cv2.resize(track_roi, (224, 224))
-                inputs = gender_processor(images=track_roi_resized, return_tensors="pt")
+                inputs = gender_processor(
+                    images=track_roi_resized, return_tensors="pt"
+                ).to(device)
                 with torch.no_grad():
                     outputs = gender_model(**inputs)
                 predicted_class_idx = outputs.logits.argmax(-1).item()
@@ -198,6 +241,21 @@ def process_frame(img, frame_number, fps):
         cv2.putText(
             img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
         )
+
+        # Send inference results to Node.js
+        result_payload = {
+            "cameraId": camera_id,
+            "track_id": str(track_id),
+            "gender": gender,
+            "age": age,
+            "time_spent": int(elapsed_time),
+            "first_appearance": str(time.time()),
+            "last_appearance": str(time.time()),
+        }
+        asyncio.run_coroutine_threadsafe(
+            send_inference_result(result_payload), main_loop
+        )
+
     return img
 
 
@@ -365,9 +423,6 @@ async def start_inference(request: StartInferenceRequest):
             400, f"Inference already running for camera_id: {camera_id}"
         )
 
-    # Notify Node.js when inference starts
-    asyncio.create_task(notify_nodejs_inference_started(camera_id, rtsp_url))
-
     # Quick check to ensure RTSP is valid
     test_cap = cv2.VideoCapture(rtsp_url)
     if not test_cap.isOpened():
@@ -398,21 +453,6 @@ async def stop_inference(request: StopInferenceRequest):
     stop_flags[camera_id] = True
     return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
 
-async def notify_nodejs_inference_started(camera_id, rtsp_url):
-    """Notify Node.js backend that inference has started."""
-    async with aiohttp.ClientSession() as session:
-        try:
-            payload = {"cameraId": camera_id, "rtspUrl": rtsp_url, "status": "started"}
-            async with session.post(NODEJS_API_URL, json=payload) as response:
-                if response.status == 200:
-                    logger.info(
-                        f"Node.js notified successfully for camera {camera_id}."
-                    )
-                else:
-                    logger.error(f"Failed to notify Node.js. Status: {response.status}")
-        except Exception as e:
-            logger.error(f"Error notifying Node.js: {e}")
-
 
 # ------------------------------------------------------------------------------
 # WebSocket Endpoint
@@ -429,6 +469,15 @@ async def websocket_endpoint(camera_id: str, websocket: WebSocket):
             await websocket.receive_text()  # Keep the connection alive
     except WebSocketDisconnect:
         ws_manager.disconnect(camera_id)
+
+
+# ------------------------------------------------------------------------------
+# Health Check Endpoint
+# ------------------------------------------------------------------------------
+@app.get("/health")
+def health_check():
+    """Simple endpoint to check if the service is running."""
+    return {"status": "healthy", "message": "FastAPI is running successfully."}
 
 
 # ------------------------------------------------------------------------------
