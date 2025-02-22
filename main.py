@@ -19,6 +19,7 @@ import websockets
 import json
 import logging
 import aiohttp
+from datetime import datetime
 
 # Import models and trackers
 from ultralytics import YOLO
@@ -27,6 +28,7 @@ from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 
 NODEJS_API_URL = "http://localhost:8080/api/v1/inference/trigger"
+NODEJS_WS_URL = "ws://localhost:8080"
 
 
 # ------------------------------------------------------------------------------
@@ -66,6 +68,7 @@ frame_buffers = {}
 # Request Models
 # ------------------------------------------------------------------------------
 class StartInferenceRequest(BaseModel):
+    user_id: str
     camera_id: str
     rtsp_url: str
 
@@ -146,7 +149,7 @@ gender_model = AutoModelForImageClassification.from_pretrained(
 # ------------------------------------------------------------------------------
 # Utility/Processing Functions
 # ------------------------------------------------------------------------------
-def process_frame(img, frame_number, fps):
+def process_frame(img, frame_number, fps, camera_id, user_id):
     """
     Process a single frame:
     - Run YOLO object detection (for class 0, typically "person").
@@ -165,6 +168,9 @@ def process_frame(img, frame_number, fps):
 
     # Update DeepSort tracker
     tracks = tracker.update_tracks(detections, frame=img)
+
+    # Generate current date in UTC
+    current_date = datetime.now().strftime("%Y-%m-%d")
 
     # Annotate each confirmed track
     for track in tracks:
@@ -198,6 +204,24 @@ def process_frame(img, frame_number, fps):
         cv2.putText(
             img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
         )
+
+        # Prepare result payload
+        result_payload = {
+            "userId": user_id,
+            "cameraId": camera_id,
+            "date": current_date,
+            "track_id": str(track_id),
+            "gender": gender,
+            "age": age,
+            "time_spent": int(elapsed_time),
+            "first_appearance": str(datetime.now()),
+            "last_appearance": str(datetime.now()),
+        }
+
+        # Send inference result to Node.js WebSocket
+        asyncio.run_coroutine_threadsafe(
+            send_inference_result_to_nodejs(result_payload), main_loop
+        )
     return img
 
 
@@ -219,7 +243,7 @@ async def stream_frames(camera_id: str):
         await asyncio.sleep(0.001)
 
 
-def process_stream(camera_id, rtsp_url):
+def process_stream(camera_id, rtsp_url, user_id):
     """
     Open the RTSP stream, process each frame using the detection/tracking
     pipeline, and stream the processed frames via WebSocket.
@@ -260,7 +284,8 @@ def process_stream(camera_id, rtsp_url):
             print(f"[INFO] Stream ended for camera_id: {camera_id}")
             break
 
-        processed_frame = process_frame(frame, frame_number, fps)
+        # Pass user_id and camera_id to process_frame
+        processed_frame = process_frame(frame, frame_number, fps, camera_id, user_id)
 
         # (Optional) Write the processed frame to a video file.
         # out.write(processed_frame)        # Encode the processed frame as JPEG
@@ -307,10 +332,49 @@ def process_stream(camera_id, rtsp_url):
         del stop_flags[camera_id]
     print(f"[INFO] Released RTSP stream for camera_id: {camera_id}")
 
-    # Push a message to any connected WebSocket that inference has stopped
+    # Notify connected WebSocket clients that inference has stopped
     asyncio.run_coroutine_threadsafe(
         ws_manager.send_text(camera_id, "inference_stopped"), main_loop
     )
+
+
+async def notify_nodejs_inference_started(camera_id, rtsp_url):
+    """Notify Node.js backend that inference has started."""
+    async with aiohttp.ClientSession() as session:
+        try:
+            payload = {"cameraId": camera_id, "rtspUrl": rtsp_url, "status": "started"}
+            async with session.post(NODEJS_API_URL, json=payload) as response:
+                if response.status == 200:
+                    logger.info(
+                        f"Node.js notified successfully for camera {camera_id}."
+                    )
+                else:
+                    logger.error(f"Failed to notify Node.js. Status: {response.status}")
+        except Exception as e:
+            logger.error(f"Error notifying Node.js: {e}")
+
+
+async def notify_nodejs_inference_stopped(camera_id):
+    """Notify Node.js backend that inference has stopped."""
+    async with aiohttp.ClientSession() as session:
+        try:
+            payload = {"cameraId": camera_id, "status": "stopped"}
+            async with session.post(NODEJS_API_URL, json=payload) as response:
+                if response.status == 200:
+                    logger.info(f"Node.js notified for camera {camera_id} stop.")
+        except Exception as e:
+            logger.error(f"Error notifying Node.js about stop: {e}")
+
+
+async def send_inference_result_to_nodejs(result):
+    """Send detected inference result to Node.js via WebSocket."""
+    try:
+        async with websockets.connect(f"{NODEJS_WS_URL}/ws") as websocket:
+            await websocket.send(json.dumps(result))
+            response = await websocket.recv()
+            logger.info(f"Node.js Response: {response}")
+    except Exception as e:
+        logger.error(f"Failed to send inference result to Node.js: {e}")
 
 
 # ------------------------------------------------------------------------------
@@ -357,6 +421,7 @@ async def start_inference(request: StartInferenceRequest):
     This launches a new thread that processes the video stream using the
     detection/tracking pipeline and streams the processed frames.
     """
+    user_id = request.user_id
     camera_id = request.camera_id
     rtsp_url = request.rtsp_url
 
@@ -374,14 +439,16 @@ async def start_inference(request: StartInferenceRequest):
         raise HTTPException(400, f"Failed to connect to RTSP URL: {rtsp_url}")
     test_cap.release()
 
-    # Start thread
+    # Start the processing thread with user_id and camera_id
     stream_thread = threading.Thread(
-        target=process_stream, args=(camera_id, rtsp_url), daemon=True
+        target=process_stream, args=(camera_id, rtsp_url, user_id), daemon=True
     )
     stream_thread.start()
     active_streams[camera_id] = {"thread": stream_thread, "rtsp_url": rtsp_url}
 
-    return {"message": f"Inference started successfully for camera_id: {camera_id}"}
+    return {
+        "message": f"Inference started for camera_id: {camera_id}, user_id: {user_id}"
+    }
 
 
 @app.post("/stop-inference")
@@ -396,23 +463,8 @@ async def stop_inference(request: StopInferenceRequest):
             400, f"No active inference running for camera_id: {camera_id}"
         )
     stop_flags[camera_id] = True
+    await notify_nodejs_inference_stopped(camera_id)
     return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
-
-async def notify_nodejs_inference_started(camera_id, rtsp_url):
-    """Notify Node.js backend that inference has started."""
-    async with aiohttp.ClientSession() as session:
-        try:
-            payload = {"cameraId": camera_id, "rtspUrl": rtsp_url, "status": "started"}
-            async with session.post(NODEJS_API_URL, json=payload) as response:
-                if response.status == 200:
-                    logger.info(
-                        f"Node.js notified successfully for camera {camera_id}."
-                    )
-                else:
-                    logger.error(f"Failed to notify Node.js. Status: {response.status}")
-        except Exception as e:
-            logger.error(f"Error notifying Node.js: {e}")
-
 
 # ------------------------------------------------------------------------------
 # WebSocket Endpoint
