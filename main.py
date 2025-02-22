@@ -26,7 +26,7 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 
-NODEJS_API_URL = "http://localhost:4000/api/v1/inference/trigger"
+NODEJS_API_URL = "http://localhost:8080/api/v1/inference/trigger"
 
 
 # ------------------------------------------------------------------------------
