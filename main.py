@@ -19,7 +19,9 @@ import websockets
 import json
 import logging
 import aiohttp
-from datetime import datetime, timedelta
+from datetime import timedelta, timezone
+import datetime
+
 
 # Import models and trackers
 from ultralytics import YOLO
@@ -157,22 +159,30 @@ gender_model = AutoModelForImageClassification.from_pretrained(
 
 def get_current_date():
     """Return the current date in 'YYYY-MM-DD' format."""
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.datetime.now().strftime("%Y-%m-%d")
+
+
+def get_utc_midnight_iso_string():
+    """
+    Returns today's date in ISO8601 at 00:00:00 UTC,
+    e.g. '2025-02-13T00:00:00.000+00:00'
+    """
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight_utc.isoformat(timespec="milliseconds")
 
 
 def json_serial(obj):
     """JSON serializer for objects not serializable by default."""
-    if isinstance(obj, datetime):
-        # return obj.strftime("%Y-%m-%dT%H:%M:%S.%fZ")  # Ensure ISO 8601 format
-        return obj.isoformat()  # Ensure proper ISO 8601 format
-
+    if isinstance(obj, datetime.datetime):
+        return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 
 
 def update_visitor_cache(user_id, camera_id, track_id, gender, age):
     """Update visitor cache with tracking details."""
     key = f"{user_id}_{camera_id}_{track_id}"
-    now = datetime.now()
+    now = datetime.datetime.now()
 
     if key not in visitor_cache:
         visitor_cache[key] = {
@@ -207,10 +217,10 @@ def send_visitor_log(user_id, camera_id, track_id):
 async def periodic_log_update():
     """Periodically send logs every 5 minutes for active visitors."""
     while True:
-        await asyncio.sleep(300)  # 5 minutes
+        await asyncio.sleep(30)  # 5 minutes
         for key, log in list(visitor_cache.items()):
             log["time_spent"] = int(
-                (datetime.now() - log["first_appearance"]).total_seconds()
+                (datetime.datetime.now() - log["first_appearance"]).total_seconds()
             )
             asyncio.run_coroutine_threadsafe(
                 send_inference_result_to_nodejs(log), main_loop
@@ -433,16 +443,19 @@ async def notify_nodejs_inference_stopped(camera_id):
 async def send_inference_result_to_nodejs(result):
     """Send detected inference result to Node.js via WebSocket."""
     try:
-        # Ensure date and all fields are properly formatted
-        # result["date"] = datetime.now().strftime("%Y-%m-%d")  # Ensure date as string
-        # Convert result to JSON with datetime serialization
+
+        if "date" not in result:
+            result["date"] = get_utc_midnight_iso_string()
+
         json_result = json.dumps(result, default=json_serial)
+        logger.info("Sending JSON to Node: %s", json_result)
+
         async with websockets.connect(f"{NODEJS_WS_URL}/ws") as websocket:
-            await websocket.send(json.dumps(json_result))
+            await websocket.send(json_result)
             response = await websocket.recv()
-            logger.info(f"Node.js Response: {response}")
+            logger.info("Node.js Response: %s", response)
     except Exception as e:
-        logger.error(f"Failed to send inference result to Node.js: {e}")
+        logger.error("Failed to send inference result to Node.js: %s", e)
 
 
 # ------------------------------------------------------------------------------
@@ -534,6 +547,7 @@ async def stop_inference(request: StopInferenceRequest):
     await notify_nodejs_inference_stopped(camera_id)
 
     return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
+
 
 # ------------------------------------------------------------------------------
 # WebSocket Endpoint
