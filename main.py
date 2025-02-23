@@ -19,14 +19,14 @@ import websockets
 import json
 import logging
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Import models and trackers
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
-
+# Node.js API and WebSocket URLs
 NODEJS_API_URL = "http://localhost:8080/api/v1/inference/trigger"
 NODEJS_WS_URL = "ws://localhost:8080"
 
@@ -60,8 +60,12 @@ stop_flags = {}
 
 # Global flag for buffered streaming optimization.
 USE_BUFFERED_STREAMING = True
+
 # Dictionary to hold a per-camera buffer queue (size 1) for frames.
 frame_buffers = {}
+
+# Cache for active tracking IDs and visitor logs
+visitor_cache = {}
 
 
 # ------------------------------------------------------------------------------
@@ -149,6 +153,73 @@ gender_model = AutoModelForImageClassification.from_pretrained(
 # ------------------------------------------------------------------------------
 # Utility/Processing Functions
 # ------------------------------------------------------------------------------
+
+
+def get_current_date():
+    """Return the current date in 'YYYY-MM-DD' format."""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def json_serial(obj):
+    """JSON serializer for objects not serializable by default."""
+    if isinstance(obj, datetime):
+        # return obj.strftime("%Y-%m-%dT%H:%M:%S.%fZ")  # Ensure ISO 8601 format
+        return obj.isoformat()  # Ensure proper ISO 8601 format
+
+    raise TypeError(f"Type {type(obj)} not serializable")
+
+
+def update_visitor_cache(user_id, camera_id, track_id, gender, age):
+    """Update visitor cache with tracking details."""
+    key = f"{user_id}_{camera_id}_{track_id}"
+    now = datetime.now()
+
+    if key not in visitor_cache:
+        visitor_cache[key] = {
+            "userId": user_id,
+            "cameraId": camera_id,
+            "track_id": track_id,
+            "gender": gender,
+            "age": age,
+            "first_appearance": now,
+            "last_appearance": now,
+            "time_spent": 0,
+        }
+    else:
+        visitor_cache[key]["last_appearance"] = now
+        visitor_cache[key]["time_spent"] = int(
+            (now - visitor_cache[key]["first_appearance"]).total_seconds()
+        )
+
+
+def send_visitor_log(user_id, camera_id, track_id):
+    """Send visitor log to Node.js and remove from cache."""
+    key = f"{user_id}_{camera_id}_{track_id}"
+    if key in visitor_cache:
+        log = visitor_cache.pop(key)
+        log["date"] = get_current_date()
+
+        asyncio.run_coroutine_threadsafe(
+            send_inference_result_to_nodejs(log), main_loop
+        )
+
+
+async def periodic_log_update():
+    """Periodically send logs every 5 minutes for active visitors."""
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+        for key, log in list(visitor_cache.items()):
+            log["time_spent"] = int(
+                (datetime.now() - log["first_appearance"]).total_seconds()
+            )
+            asyncio.run_coroutine_threadsafe(
+                send_inference_result_to_nodejs(log), main_loop
+            )
+
+
+asyncio.create_task(periodic_log_update())
+
+
 def process_frame(img, frame_number, fps, camera_id, user_id):
     """
     Process a single frame:
@@ -159,6 +230,7 @@ def process_frame(img, frame_number, fps, camera_id, user_id):
     """
     results = yolo_model.predict(img, classes=[0], conf=0.5)
     detections = []
+
     for result in results:
         for box in result.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -167,61 +239,47 @@ def process_frame(img, frame_number, fps, camera_id, user_id):
             detections.append([[x1, y1, x2 - x1, y2 - y1], confidence, class_id])
 
     # Update DeepSort tracker
-    tracks = tracker.update_tracks(detections, frame=img)
-
+    tracks = tracker.update_tracks(
+        detections, frame=img
+    )  
     # Generate current date in UTC
-    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_date = get_current_date()
 
     # Annotate each confirmed track
     for track in tracks:
         if not track.is_confirmed():
             continue
+
         track_id = track.track_id
         x1, y1, x2, y2 = map(int, track.to_tlbr())
         track_roi = img[y1:y2, x1:x2]
 
         # Gender classification
+        gender = "Unknown"
         try:
-            if track_roi.size == 0:
-                gender = "Unknown"
-            else:
+            if track_roi.size > 0:
                 track_roi_resized = cv2.resize(track_roi, (224, 224))
-                inputs = gender_processor(images=track_roi_resized, return_tensors="pt")
+                inputs = gender_processor(images=track_roi_resized, return_tensors="pt").to(device)
                 with torch.no_grad():
                     outputs = gender_model(**inputs)
                 predicted_class_idx = outputs.logits.argmax(-1).item()
                 gender = gender_model.config.id2label.get(
                     predicted_class_idx, "Unknown"
                 )
-        except Exception as e:
-            gender = "Unknown"
+        except Exception:
+            pass
 
-        # Example: random "age" & annotation
-        elapsed_time = frame_number / fps
         age = random.choice(["25-35", "36-50"])
+        update_visitor_cache(user_id, camera_id, track_id, gender, age)
+
+        # Display annotation
+        elapsed_time = visitor_cache[f"{user_id}_{camera_id}_{track_id}"]["time_spent"]
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         text = f"ID:{track_id} {gender} {age} {elapsed_time:.2f}s"
         cv2.putText(
             img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
         )
 
-        # Prepare result payload
-        result_payload = {
-            "userId": user_id,
-            "cameraId": camera_id,
-            "date": current_date,
-            "track_id": str(track_id),
-            "gender": gender,
-            "age": age,
-            "time_spent": int(elapsed_time),
-            "first_appearance": str(datetime.now()),
-            "last_appearance": str(datetime.now()),
-        }
-
-        # Send inference result to Node.js WebSocket
-        asyncio.run_coroutine_threadsafe(
-            send_inference_result_to_nodejs(result_payload), main_loop
-        )
     return img
 
 
@@ -250,7 +308,7 @@ def process_stream(camera_id, rtsp_url, user_id):
     """
     cap = cv2.VideoCapture(rtsp_url)
     if not cap.isOpened():
-        print(f"[ERROR] Unable to open RTSP stream: {rtsp_url}")
+        logger.error(f"Unable to open RTSP stream: {rtsp_url}")
         return
 
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -321,6 +379,12 @@ def process_stream(camera_id, rtsp_url, user_id):
         # time.sleep(0.01)
 
     cap.release()
+
+    # Send final logs when stream stops
+    for key in list(visitor_cache.keys()):
+        if key.startswith(f"{user_id}_{camera_id}"):
+            send_visitor_log(user_id, camera_id, key.split("_")[-1])
+
     # (Optional) If saving video, release the writer.
     # out.release()
     if camera_id in active_streams:
@@ -369,8 +433,12 @@ async def notify_nodejs_inference_stopped(camera_id):
 async def send_inference_result_to_nodejs(result):
     """Send detected inference result to Node.js via WebSocket."""
     try:
+        # Ensure date and all fields are properly formatted
+        # result["date"] = datetime.now().strftime("%Y-%m-%d")  # Ensure date as string
+        # Convert result to JSON with datetime serialization
+        json_result = json.dumps(result, default=json_serial)
         async with websockets.connect(f"{NODEJS_WS_URL}/ws") as websocket:
-            await websocket.send(json.dumps(result))
+            await websocket.send(json.dumps(json_result))
             response = await websocket.recv()
             logger.info(f"Node.js Response: {response}")
     except Exception as e:
@@ -464,6 +532,7 @@ async def stop_inference(request: StopInferenceRequest):
         )
     stop_flags[camera_id] = True
     await notify_nodejs_inference_stopped(camera_id)
+
     return {"message": f"Inference stopped successfully for camera_id: {camera_id}"}
 
 # ------------------------------------------------------------------------------
@@ -482,6 +551,14 @@ async def websocket_endpoint(camera_id: str, websocket: WebSocket):
     except WebSocketDisconnect:
         ws_manager.disconnect(camera_id)
 
+
+# ------------------------------------------------------------------------------
+# Health Check and Utility Endpoints
+# ------------------------------------------------------------------------------
+@app.get("/health")
+def health_check():
+    """Health check endpoint for FastAPI service."""
+    return {"status": "healthy", "message": "FastAPI is running successfully."}
 
 # ------------------------------------------------------------------------------
 # To run the application:
