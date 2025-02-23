@@ -217,7 +217,7 @@ def send_visitor_log(user_id, camera_id, track_id):
 async def periodic_log_update():
     """Periodically send logs every 5 minutes for active visitors."""
     while True:
-        await asyncio.sleep(30)  # 5 minutes
+        await asyncio.sleep(120)  # 2 minutes
         for key, log in list(visitor_cache.items()):
             log["time_spent"] = int(
                 (datetime.datetime.now() - log["first_appearance"]).total_seconds()
@@ -235,8 +235,8 @@ def process_frame(img, frame_number, fps, camera_id, user_id):
     Process a single frame:
     - Run YOLO object detection (for class 0, typically "person").
     - Track objects with DeepSort.
-    - For each confirmed track, perform gender prediction,
-      assign a dummy age, and annotate the frame.
+    - For each confirmed track, perform gender prediction and assign a dummy age only when first detected.
+      For subsequent frames, reuse the initial values.
     """
     results = yolo_model.predict(img, classes=[0], conf=0.5)
     detections = []
@@ -249,11 +249,8 @@ def process_frame(img, frame_number, fps, camera_id, user_id):
             detections.append([[x1, y1, x2 - x1, y2 - y1], confidence, class_id])
 
     # Update DeepSort tracker
-    tracks = tracker.update_tracks(
-        detections, frame=img
-    )  
-    # Generate current date in UTC
-    current_date = get_current_date()
+    tracks = tracker.update_tracks(detections, frame=img)
+    current_date = get_current_date()  # not used further here but preserved for consistency
 
     # Annotate each confirmed track
     for track in tracks:
@@ -263,32 +260,35 @@ def process_frame(img, frame_number, fps, camera_id, user_id):
         track_id = track.track_id
         x1, y1, x2, y2 = map(int, track.to_tlbr())
         track_roi = img[y1:y2, x1:x2]
+        key = f"{user_id}_{camera_id}_{track_id}"
 
-        # Gender classification
-        gender = "Unknown"
-        try:
-            if track_roi.size > 0:
-                track_roi_resized = cv2.resize(track_roi, (224, 224))
-                inputs = gender_processor(images=track_roi_resized, return_tensors="pt").to(device)
-                with torch.no_grad():
-                    outputs = gender_model(**inputs)
-                predicted_class_idx = outputs.logits.argmax(-1).item()
-                gender = gender_model.config.id2label.get(
-                    predicted_class_idx, "Unknown"
-                )
-        except Exception:
-            pass
+        # If this track is new, run gender/age detection; otherwise, reuse stored values.
+        if key not in visitor_cache:
+            gender = "Unknown"
+            try:
+                if track_roi.size > 0:
+                    track_roi_resized = cv2.resize(track_roi, (224, 224))
+                    inputs = gender_processor(images=track_roi_resized, return_tensors="pt").to(device)
+                    with torch.no_grad():
+                        outputs = gender_model(**inputs)
+                    predicted_class_idx = outputs.logits.argmax(-1).item()
+                    gender = gender_model.config.id2label.get(predicted_class_idx, "Unknown")
+            except Exception:
+                pass
+            age = random.choice(["25-35", "36-50"])
+        else:
+            # Reuse the existing gender and age from the cache.
+            gender = visitor_cache[key]["gender"]
+            age = visitor_cache[key]["age"]
 
-        age = random.choice(["25-35", "36-50"])
+        # Update (or create) the visitor cache entry.
         update_visitor_cache(user_id, camera_id, track_id, gender, age)
 
-        # Display annotation
-        elapsed_time = visitor_cache[f"{user_id}_{camera_id}_{track_id}"]["time_spent"]
+        # Draw the annotation using the stored (or newly detected) values.
+        elapsed_time = visitor_cache[key]["time_spent"]
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         text = f"ID:{track_id} {gender} {age} {elapsed_time:.2f}s"
-        cv2.putText(
-            img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2
-        )
+        cv2.putText(img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
     return img
 
