@@ -287,8 +287,19 @@ def process_frame(img, frame_number, fps, camera_id, user_id):
         # Draw the annotation using the stored (or newly detected) values.
         elapsed_time = visitor_cache[key]["time_spent"]
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        text = f"ID:{track_id} {gender} {age} {elapsed_time:.2f}s"
-        cv2.putText(img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        # text = f"ID:{track_id} {gender} {age} {elapsed_time:.2f}s"
+        # cv2.putText(img, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        text = f"ID:{track_id} Gender:{gender} Age:{age} Time:{elapsed_time:.2f}s"
+        lines = text.split()
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.9 
+        font_thickness = 2
+        color = (255, 255, 255)  
+
+        for i, line in enumerate(lines):
+            y_offset = y1 + i * 30  # Adjust vertical spacing
+            cv2.putText(img, line, (x1, y_offset), font, font_scale, color, font_thickness)
 
     return img
 
