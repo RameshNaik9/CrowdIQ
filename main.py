@@ -57,6 +57,8 @@ main_loop = asyncio.get_event_loop()
 # Dictionary to hold active stream threads and their info.
 active_streams = {}
 
+raw_active_streams = {}
+
 # Global dictionary to hold stop flags for each camera.
 stop_flags = {}
 
@@ -494,8 +496,70 @@ def process_local_stream(camera_id, user_id):
         del stop_flags[camera_id]
     print(f"[INFO] Released local camera stream for camera_id: {camera_id}")
 
+
     asyncio.run_coroutine_threadsafe(
         ws_manager.send_text(camera_id, "inference_stopped"), main_loop
+    )
+# ------------------------------------------------------------------------------
+# New Functions for Raw Streaming (RTSP only)
+# ------------------------------------------------------------------------------
+def process_stream_raw(camera_id, rtsp_url, user_id):
+    """
+    Open the RTSP stream and stream raw frames (without processing) via WebSocket.
+    This endpoint is only for RTSP cameras.
+    """
+    cap = cv2.VideoCapture(rtsp_url)
+    if not cap.isOpened():
+        logger.error(f"Unable to open RTSP stream: {rtsp_url}")
+        return
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps == 0:
+        fps = 20
+    frame_number = 0
+    if USE_BUFFERED_STREAMING:
+        frame_buffers[camera_id] = queue.Queue(maxsize=1)
+        main_loop.call_soon_threadsafe(asyncio.create_task, stream_frames(camera_id))
+    stop_flags[camera_id] = False
+    while True:
+        if stop_flags.get(camera_id):
+            print(f"[INFO] Stop flag received for camera_id: {camera_id}")
+            break
+        ret, frame = cap.read()
+        if not ret:
+            print(f"[INFO] Stream ended for camera_id: {camera_id}")
+            break
+        success, buffer = cv2.imencode(".jpg", frame)
+        if not success:
+            print("[ERROR] Failed to encode frame")
+            continue
+        frame_bytes = buffer.tobytes()
+        if USE_BUFFERED_STREAMING:
+            try:
+                frame_buffers[camera_id].put(frame_bytes, block=False)
+            except queue.Full:
+                try:
+                    frame_buffers[camera_id].get_nowait()
+                except queue.Empty:
+                    pass
+                frame_buffers[camera_id].put(frame_bytes, block=False)
+        else:
+            try:
+                main_loop.call_soon_threadsafe(
+                    asyncio.create_task, ws_manager.send_frame(camera_id, frame_bytes)
+                )
+            except Exception as e:
+                print(f"[ERROR] Failed to send frame: {e}")
+        frame_number += 1
+    cap.release()
+    if camera_id in raw_active_streams:
+        del raw_active_streams[camera_id]
+    if camera_id in frame_buffers:
+        del frame_buffers[camera_id]
+    if camera_id in stop_flags:
+        del stop_flags[camera_id]
+    print(f"[INFO] Released RTSP raw stream for camera_id: {camera_id}")
+    asyncio.run_coroutine_threadsafe(
+        ws_manager.send_text(camera_id, "live_stream_stopped"), main_loop
     )
 
 
@@ -569,6 +633,64 @@ def check_stream(rtsp_url: str = Query(..., description="RTSP URL to verify")):
         )
     return {"message": "RTSP stream is valid and reachable."}
 
+
+# ------------------------------------------------------------------------------
+# New Endpoint: /start-live-stream (Raw streaming for RTSP only)
+# ------------------------------------------------------------------------------
+@app.post("/start-live-stream")
+async def start_live_stream(request: StartInferenceRequest):
+    """
+    Start the raw live stream for an RTSP camera.
+    This endpoint starts a new thread that reads raw frames (without processing)
+    from the RTSP stream and streams them via WebSocket.
+    """
+    user_id = request.user_id
+    camera_id = request.camera_id
+    rtsp_url = request.rtsp_url
+
+    if rtsp_url.lower() == "local":
+        raise HTTPException(
+            400, "Local camera live streaming is not supported via this endpoint."
+        )
+
+    if camera_id in raw_active_streams:
+        raise HTTPException(
+            400, f"Live stream already running for camera_id: {camera_id}"
+        )
+
+    test_cap = cv2.VideoCapture(rtsp_url)
+    if not test_cap.isOpened():
+        raise HTTPException(400, f"Failed to connect to RTSP URL: {rtsp_url}")
+    test_cap.release()
+
+    stream_thread = threading.Thread(
+        target=process_stream_raw, args=(camera_id, rtsp_url, user_id), daemon=True
+    )
+    stream_thread.start()
+    raw_active_streams[camera_id] = {"thread": stream_thread, "rtsp_url": rtsp_url}
+    return {
+        "message": f"Live stream started for camera_id: {camera_id}, user_id: {user_id}"
+    }
+
+
+@app.post("/stop-live-stream")
+def stop_live_stream(req: StopInferenceRequest):
+    """
+    Stop the raw/unprocessed streaming if active.
+    Does NOT affect inference streams.
+    """
+    camera_id = req.camera_id
+    # Make sure there's an active raw stream for this camera
+    if camera_id not in raw_active_streams:
+        raise HTTPException(400, f"No active raw stream found for camera {camera_id}")
+    # (Optional) If you track mode, e.g. raw_active_streams[camera_id]["mode"] == "raw", check that here:
+    # if raw_active_streams[camera_id]["mode"] != "raw":
+    #     raise HTTPException(400, f"Camera {camera_id} is not in raw stream mode.")
+
+    # Signal the thread to stop
+    stop_flags[camera_id] = True
+
+    return {"message": f"Raw live stream stopped for camera_id: {camera_id}"}
 
 # ------------------------------------------------------------------------------
 # New route: /inference-status
